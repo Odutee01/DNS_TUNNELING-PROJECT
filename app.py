@@ -118,6 +118,10 @@ except Exception as e:
 
 @st.cache_resource
 def get_scaler_and_features():
+    pkl_path = "scaler_and_features.pkl"
+    if os.path.exists(pkl_path):
+        return joblib.load(pkl_path)
+    
     dataset_path = "preprocessed10_dataset.csv"
     if os.path.exists(dataset_path):
         base_df = pd.read_csv(dataset_path)
@@ -158,9 +162,9 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
     if scaler is None:
-        st.error("⚠️ preprocessed10_dataset.csv not found! Standard scaling will be disabled.")
+        st.error("⚠️ scaler_and_features.pkl not found! Standard scaling will be disabled.")
     else:
-        st.success("✅ Scaler active & fitted.")
+        st.success("✅ Scaler active & loaded (pre-fitted).")
 
     st.markdown("""
     <div style="
@@ -207,6 +211,12 @@ with col_setup:
 
 # Process Uploaded File
 if uploaded_file is not None:
+    # Check if a new file has been uploaded to reset results state
+    if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != uploaded_file.name:
+        st.session_state.last_uploaded_file = uploaded_file.name
+        st.session_state.results_df = None
+        st.session_state.stats = None
+
     df = pd.read_csv(uploaded_file)
     original_df_display = df.copy()
     
@@ -223,7 +233,8 @@ if uploaded_file is not None:
         analyze_btn = st.button("🚀 Analyze Traffic & Detect Anomalies")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    if 'analyze_btn' in locals() and analyze_btn:
+    # If the button is clicked, we run the prediction and store it in session state
+    if analyze_btn:
         with st.spinner("Classifying DNS traffic patterns via XGBoost..."):
             try:
                 # Prepare data
@@ -254,56 +265,74 @@ if uploaded_file is not None:
                 benign_cnt = total_cnt - attack_cnt
                 attack_pct = (attack_cnt / total_cnt) * 100
                 
-                st.markdown("<br/>", unsafe_allow_html=True)
-                st.subheader("📊 Detection Dashboard")
-                
-                # Metrics Row
-                m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-                with m_col1:
-                    st.markdown(get_metric_card("Total Analyzed", f"{total_cnt:,}", "#2a5298", "🔍"), unsafe_allow_html=True)
-                with m_col2:
-                    st.markdown(get_metric_card("Benign Traffic", f"{benign_cnt:,}", "#2e7d32", "✅"), unsafe_allow_html=True)
-                with m_col3:
-                    st.markdown(get_metric_card("Attacks Detected", f"{attack_cnt:,}", "#c62828", "🚨"), unsafe_allow_html=True)
-                with m_col4:
-                    st.markdown(get_metric_card("Threat Ratio", f"{attack_pct:.1f}%", "#ef6c00", "📈"), unsafe_allow_html=True)
-
-                st.markdown("<br/>", unsafe_allow_html=True)
-                
-                # Visualization and Detail Breakdown
-                vis_col, data_col = st.columns([2, 3], gap="large")
-                
-                with vis_col:
-                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                    st.subheader("Distribution Breakdown")
-                    chart_df = pd.DataFrame({
-                        'Count': [benign_cnt, attack_cnt]
-                    }, index=['Benign (Normal)', 'Attack (Tunneling)'])
-                    st.bar_chart(chart_df, color="#2a5298" if attack_cnt < benign_cnt else "#c62828")
-                    
-                    # Custom progress bar for threat ratio
-                    st.write("Threat Level Indicator:")
-                    st.progress(attack_pct / 100.0)
-                    if attack_pct > 20:
-                        st.markdown("<span style='color:#c62828; font-weight:bold;'>🚨 High Threat Level Detected!</span> Action is recommended.", unsafe_allow_html=True)
-                    else:
-                        st.markdown("<span style='color:#2e7d32; font-weight:bold;'>✅ Normal Threat Levels.</span> DNS traffic is healthy.", unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
-                
-                with data_col:
-                    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-                    st.subheader("Actionable Insights")
-                    st.write("Here is the prediction results dataframe. Scroll to the rightmost columns (`Prediction_Class` & `Prediction_Label`) to see specific classifications.")
-                    st.dataframe(results_df, use_container_width=True)
-                    
-                    csv = results_df.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="📥 Download Detailed Reports (CSV)",
-                        data=csv,
-                        file_name='dns_tunneling_predictions.csv',
-                        mime='text/csv',
-                    )
-                    st.markdown('</div>', unsafe_allow_html=True)
-                    
+                # Save to session state
+                st.session_state.results_df = results_df
+                st.session_state.stats = {
+                    'total_cnt': total_cnt,
+                    'attack_cnt': attack_cnt,
+                    'benign_cnt': benign_cnt,
+                    'attack_pct': attack_pct
+                }
             except Exception as e:
                 st.error(f"An error occurred during prediction: {e}")
+
+    # If we have stored results, display them (this persists on re-runs, e.g. when downloading)
+    if st.session_state.results_df is not None and st.session_state.stats is not None:
+        results_df = st.session_state.results_df
+        stats = st.session_state.stats
+        total_cnt = stats['total_cnt']
+        attack_cnt = stats['attack_cnt']
+        benign_cnt = stats['benign_cnt']
+        attack_pct = stats['attack_pct']
+        
+        st.markdown("<br/>", unsafe_allow_html=True)
+        st.subheader("📊 Detection Dashboard")
+        
+        # Metrics Row
+        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+        with m_col1:
+            st.markdown(get_metric_card("Total Analyzed", f"{total_cnt:,}", "#2a5298", "🔍"), unsafe_allow_html=True)
+        with m_col2:
+            st.markdown(get_metric_card("Benign Traffic", f"{benign_cnt:,}", "#2e7d32", "✅"), unsafe_allow_html=True)
+        with m_col3:
+            st.markdown(get_metric_card("Attacks Detected", f"{attack_cnt:,}", "#c62828", "🚨"), unsafe_allow_html=True)
+        with m_col4:
+            st.markdown(get_metric_card("Threat Ratio", f"{attack_pct:.1f}%", "#ef6c00", "📈"), unsafe_allow_html=True)
+
+        st.markdown("<br/>", unsafe_allow_html=True)
+        
+        # Visualization and Detail Breakdown
+        vis_col, data_col = st.columns([2, 3], gap="large")
+        
+        with vis_col:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.subheader("Distribution Breakdown")
+            chart_df = pd.DataFrame({
+                'Count': [benign_cnt, attack_cnt]
+            }, index=['Benign (Normal)', 'Attack (Tunneling)'])
+            st.bar_chart(chart_df, color="#2a5298" if attack_cnt < benign_cnt else "#c62828")
+            
+            # Custom progress bar for threat ratio
+            st.write("Threat Level Indicator:")
+            st.progress(attack_pct / 100.0)
+            if attack_pct > 20:
+                st.markdown("<span style='color:#c62828; font-weight:bold;'>🚨 High Threat Level Detected!</span> Action is recommended.", unsafe_allow_html=True)
+            else:
+                st.markdown("<span style='color:#2e7d32; font-weight:bold;'>✅ Normal Threat Levels.</span> DNS traffic is healthy.", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with data_col:
+            st.markdown('<div class="section-card">', unsafe_allow_html=True)
+            st.subheader("Actionable Insights")
+            st.write("Here is the prediction results dataframe. Scroll to the rightmost columns (`Prediction_Class` & `Prediction_Label`) to see specific classifications.")
+            st.dataframe(results_df, use_container_width=True)
+            
+            csv = results_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Detailed Reports (CSV)",
+                data=csv,
+                file_name='dns_tunneling_predictions.csv',
+                mime='text/csv',
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+
